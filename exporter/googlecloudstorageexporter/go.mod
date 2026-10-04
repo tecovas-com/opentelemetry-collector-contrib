@@ -19,6 +19,7 @@ require (
 	go.opentelemetry.io/collector/consumer/consumererror v0.162.1-0.20261002061526-adaf75eebce7
 	go.opentelemetry.io/collector/exporter v1.68.1-0.20261002061526-adaf75eebce7
 	go.opentelemetry.io/collector/exporter/exporterhelper v0.162.1-0.20261002061526-adaf75eebce7
+	go.opentelemetry.io/collector/exporter/exportertest v0.162.0
 	go.opentelemetry.io/collector/exporter/xexporter v0.162.1-0.20261002061526-adaf75eebce7
 	go.opentelemetry.io/collector/extension v1.68.1-0.20261002061526-adaf75eebce7
 	go.opentelemetry.io/collector/pdata v1.68.1-0.20261002061526-adaf75eebce7
@@ -65,6 +66,7 @@ require (
 	github.com/spiffe/go-spiffe/v2 v2.8.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/collector/client v1.68.1-0.20261002061526-adaf75eebce7 // indirect
+	go.opentelemetry.io/collector/consumer/consumertest v0.162.0 // indirect
 	go.opentelemetry.io/collector/consumer/xconsumer v0.162.1-0.20261002061526-adaf75eebce7 // indirect
 	go.opentelemetry.io/collector/extension/xextension v0.162.1-0.20261002061526-adaf75eebce7 // indirect
 	go.opentelemetry.io/collector/featuregate v1.68.1-0.20261002061526-adaf75eebce7 // indirect
@@ -73,6 +75,9 @@ require (
 	go.opentelemetry.io/collector/pdata/xpdata v0.162.1-0.20261002061526-adaf75eebce7 // indirect
 	go.opentelemetry.io/collector/pipeline v1.68.1-0.20261002061526-adaf75eebce7 // indirect
 	go.opentelemetry.io/collector/pipeline/xpipeline v0.162.1-0.20261002061526-adaf75eebce7 // indirect
+	go.opentelemetry.io/collector/receiver v1.68.0 // indirect
+	go.opentelemetry.io/collector/receiver/receivertest v0.162.0 // indirect
+	go.opentelemetry.io/collector/receiver/xreceiver v0.162.0 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.44.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.68.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect

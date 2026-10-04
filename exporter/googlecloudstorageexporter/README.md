@@ -2,7 +2,7 @@
 # Google Cloud Storage Exporter
 | Status        |           |
 | ------------- |-----------|
-| Stability     | [development]: traces   |
+| Stability     | [development]: traces, metrics   |
 |               | [alpha]: logs   |
 | Distributions | [contrib] |
 | Issues        | [![Open issues](https://img.shields.io/github/issues-search/open-telemetry/opentelemetry-collector-contrib?query=is%3Aissue%20is%3Aopen%20label%3Aexporter%2Fgooglecloudstorage%20&label=open&color=orange&logo=opentelemetry)](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues?q=is%3Aopen+is%3Aissue+label%3Aexporter%2Fgooglecloudstorage) [![Closed issues](https://img.shields.io/github/issues-search/open-telemetry/opentelemetry-collector-contrib?query=is%3Aissue%20is%3Aclosed%20label%3Aexporter%2Fgooglecloudstorage%20&label=closed&color=blue&logo=opentelemetry)](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues?q=is%3Aclosed+is%3Aissue+label%3Aexporter%2Fgooglecloudstorage) |
@@ -20,7 +20,7 @@ This exporter writes received OpenTelemetry data to a cloud storage bucket.
 
 | Name                     | Description                                                                                                                                                                                                              | Required | Default |
 |--------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|---------|
-| `encoding`               | The encoding extension ID to use for marshaling logs and traces. If left empty, `plog.JSONMarshaler` will be used for logs and `ptrace.JSONMarshaler` will be used for traces.                                          | No       |         |
+| `encoding`               | The encoding extension ID to use for marshaling logs, traces and metrics. If left empty, `plog.JSONMarshaler` will be used for logs, `ptrace.JSONMarshaler` for traces and `pmetric.JSONMarshaler` for metrics. If the extension cannot marshal traces or metrics, the exporter falls back to the JSON marshaler for that signal and logs a warning. | No       |         |
 | `bucket.project_id`      | The project where the bucket will be created or where it exists. If left empty, it will query the metadata endpoint. It requires the collector to be running in a Google Cloud environment.                              | No       |         |
 | `bucket.name`            | Name for the bucket storage.                                                                                                                                                                                             | Yes      |         |
 | `bucket.file_prefix`     | Prefix for the created filename. This prefix is applied after the partition path (if any).                                                                                                                               | No       | `logs`  |

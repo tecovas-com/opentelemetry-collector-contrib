@@ -10,9 +10,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,10 +24,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/config/configcompression"
 	"go.opentelemetry.io/collector/extension"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.uber.org/zap"
 	"google.golang.org/api/googleapi"
@@ -118,6 +123,15 @@ func TestNewStorageExporter(t *testing.T) {
 			signal:     signalTypeLogs,
 			expectsErr: "failed to parse partition format",
 		},
+		"metrics signal": {
+			cfg: &Config{
+				Bucket: bucketConfig{
+					ProjectID: "test",
+					Region:    "test",
+				},
+			},
+			signal: signalTypeMetrics,
+		},
 		"invalid signal type": {
 			cfg: &Config{
 				Bucket: bucketConfig{
@@ -179,6 +193,7 @@ func TestStart(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, &plog.JSONMarshaler{}, gcsExporter.logsMarshaler)
 		require.Equal(t, &ptrace.JSONMarshaler{}, gcsExporter.tracesMarshaler)
+		require.Equal(t, &pmetric.JSONMarshaler{}, gcsExporter.metricsMarshaler)
 	})
 
 	gcsExporter.cfg.Encoding = &id
@@ -496,11 +511,15 @@ func TestConsumeLogs(t *testing.T) {
 	encodingSucceedsID := "id_success"
 	encodingFailsID := "id_fail"
 	encodingLogsOnlyID := "id_logs_only"
+	encodingMetricsID := "id_metrics"
+	encodingMetricsFailsID := "id_metrics_fail"
 	mHost := &mockHost{
 		extensions: map[component.ID]component.Component{
-			component.MustNewID(encodingSucceedsID): &mockBothMarshaler{},
-			component.MustNewID(encodingFailsID):    &mockLogMarshaler{shouldFail: true},
-			component.MustNewID(encodingLogsOnlyID): &mockLogMarshaler{},
+			component.MustNewID(encodingSucceedsID):     &mockBothMarshaler{},
+			component.MustNewID(encodingFailsID):        &mockLogMarshaler{shouldFail: true},
+			component.MustNewID(encodingLogsOnlyID):     &mockLogMarshaler{},
+			component.MustNewID(encodingMetricsID):      &mockMetricMarshaler{},
+			component.MustNewID(encodingMetricsFailsID): &mockMetricMarshaler{shouldFail: true},
 		},
 	}
 
@@ -533,6 +552,24 @@ func TestConsumeLogs(t *testing.T) {
 			id:     encodingSucceedsID,
 			signal: signalTypeTraces,
 		},
+		{
+			name:              "metrics encoding fails",
+			id:                encodingMetricsFailsID,
+			signal:            signalTypeMetrics,
+			expectsConsumeErr: "failed to marshal metrics",
+		},
+		{
+			name:              "metrics with logs-only encoding falls back to JSON",
+			id:                encodingLogsOnlyID,
+			signal:            signalTypeMetrics,
+			expectedMarshaler: &pmetric.JSONMarshaler{},
+		},
+		{
+			name:              "metrics encoding succeeds",
+			id:                encodingMetricsID,
+			signal:            signalTypeMetrics,
+			expectedMarshaler: &mockMetricMarshaler{},
+		},
 	}
 
 	for _, tt := range tests {
@@ -550,17 +587,23 @@ func TestConsumeLogs(t *testing.T) {
 			require.NoError(t, errStart)
 
 			if tt.expectedMarshaler != nil {
-				if tt.signal == signalTypeTraces {
+				switch tt.signal {
+				case signalTypeTraces:
 					require.IsType(t, tt.expectedMarshaler, gcsExporter.tracesMarshaler)
-				} else {
+				case signalTypeMetrics:
+					require.IsType(t, tt.expectedMarshaler, gcsExporter.metricsMarshaler)
+				default:
 					require.IsType(t, tt.expectedMarshaler, gcsExporter.logsMarshaler)
 				}
 			}
 
 			var err error
-			if tt.signal == signalTypeTraces {
+			switch tt.signal {
+			case signalTypeTraces:
 				err = gcsExporter.ConsumeTraces(t.Context(), ptrace.NewTraces())
-			} else {
+			case signalTypeMetrics:
+				err = gcsExporter.ConsumeMetrics(t.Context(), pmetric.NewMetrics())
+			default:
 				err = gcsExporter.ConsumeLogs(t.Context(), plog.NewLogs())
 			}
 
@@ -571,6 +614,47 @@ func TestConsumeLogs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConsumeMetricsUpload(t *testing.T) {
+	uploadBucketName := "upload-bucket"
+	uploads := newRecordingStorageEmulator(t, uploadBucketName)
+
+	gcsExporter := newTestGCSExporter(t, &Config{
+		Bucket: bucketConfig{
+			Name:          uploadBucketName,
+			ReuseIfExists: true,
+			FilePrefix:    "metrics",
+			Compression:   configcompression.TypeGzip,
+			Partition: partitionConfig{
+				Prefix: "archive",
+				Format: "year=%Y",
+			},
+		},
+		ResourceAttrsToGCS: ResourceAttrsToGCS{Prefix: "service.name"},
+	}, signalTypeMetrics)
+	require.NoError(t, gcsExporter.Start(t.Context(), componenttest.NewNopHost()))
+
+	md := pmetric.NewMetrics()
+	for _, service := range []string{"serviceA", "serviceB"} {
+		rm := md.ResourceMetrics().AppendEmpty()
+		rm.Resource().Attributes().PutStr("service.name", service)
+		m := rm.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+		m.SetName("requests")
+		m.SetEmptyGauge().DataPoints().AppendEmpty().SetIntValue(42)
+	}
+	require.NoError(t, gcsExporter.ConsumeMetrics(t.Context(), md))
+
+	objects := uploads()
+	require.Len(t, objects, 1)
+	// The attribute partition comes from the first ResourceMetrics.
+	assert.Regexp(t, `^archive/serviceA/year=\d{4}/metrics_[0-9a-f-]{36}\.gz$`, objects[0].name)
+
+	decompressed, closer := decompressData(t, objects[0].content, configcompression.TypeGzip)
+	defer closer()
+	got, err := (&pmetric.JSONUnmarshaler{}).UnmarshalMetrics(decompressed)
+	require.NoError(t, err)
+	assert.Equal(t, md, got)
 }
 
 func TestCompression(t *testing.T) {
@@ -767,6 +851,58 @@ func newTestStorageEmulator(t *testing.T, bucketExistsName, uploadBucketName str
 	t.Setenv("STORAGE_EMULATOR_HOST", server.Listener.Addr().String())
 }
 
+// recordedObject is an object received by newRecordingStorageEmulator.
+type recordedObject struct {
+	name    string
+	content []byte
+}
+
+// newRecordingStorageEmulator starts a storage emulator that reports bucketName
+// as existing and records every multipart object upload to it. It returns a
+// function listing the objects received so far.
+func newRecordingStorageEmulator(t *testing.T, bucketName string) func() []recordedObject {
+	var (
+		mu      sync.Mutex
+		objects []recordedObject
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/storage/v1/b/"+bucketName:
+			assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{"name": bucketName}))
+		case r.Method == http.MethodPost && r.URL.Path == "/upload/storage/v1/b/"+bucketName+"/o":
+			_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			assert.NoError(t, err)
+			reader := multipart.NewReader(r.Body, params["boundary"])
+			metaPart, err := reader.NextPart()
+			assert.NoError(t, err)
+			var meta struct {
+				Name string `json:"name"`
+			}
+			assert.NoError(t, json.NewDecoder(metaPart).Decode(&meta))
+			dataPart, err := reader.NextPart()
+			assert.NoError(t, err)
+			content, err := io.ReadAll(dataPart)
+			assert.NoError(t, err)
+
+			mu.Lock()
+			objects = append(objects, recordedObject{name: meta.Name, content: content})
+			mu.Unlock()
+			assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{"bucket": bucketName, "name": meta.Name}))
+		default:
+			t.Errorf("Unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("STORAGE_EMULATOR_HOST", server.Listener.Addr().String())
+
+	return func() []recordedObject {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]recordedObject(nil), objects...)
+	}
+}
+
 type mockHost struct {
 	extensions map[component.ID]component.Component
 }
@@ -798,6 +934,20 @@ func (*mockTraceMarshaler) MarshalTraces(_ ptrace.Traces) ([]byte, error) {
 }
 
 var _ ptrace.Marshaler = (*mockTraceMarshaler)(nil)
+
+type mockMetricMarshaler struct {
+	extension.Extension
+	shouldFail bool
+}
+
+func (m *mockMetricMarshaler) MarshalMetrics(_ pmetric.Metrics) ([]byte, error) {
+	if m.shouldFail {
+		return nil, errors.New("marshaling failed")
+	}
+	return nil, nil
+}
+
+var _ pmetric.Marshaler = (*mockMetricMarshaler)(nil)
 
 type mockBothMarshaler struct {
 	extension.Extension
